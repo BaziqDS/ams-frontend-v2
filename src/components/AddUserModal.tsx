@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { apiFetch, type Page } from "@/lib/api";
-import { buildLocationTree, type Location, type User } from "@/lib/userUiShared";
+import { type Location, type User } from "@/lib/userUiShared";
 import { useAuth } from "@/contexts/AuthContext";
 
 // ── Backend API types ─────────────────────────────────────────────────────────
@@ -15,6 +15,8 @@ interface ApiLocation {
   location_type: string;
   hierarchy_level: number;
   is_active: boolean;
+  is_standalone: boolean;
+  is_store: boolean;
 }
 
 interface ApiGroup {
@@ -29,8 +31,13 @@ interface UserManagementDetail extends User {
   groups?: number[];
 }
 
-// Map backend location → frontend Location shape for the tree picker
-function mapLocation(l: ApiLocation): Location {
+interface AssignableLocation extends Location {
+  is_standalone: boolean;
+  is_store: boolean;
+}
+
+// Map backend location -> frontend Location shape for assignment controls
+function mapLocation(l: ApiLocation): AssignableLocation {
   const kindMap: Record<string, string> = {
     DEPARTMENT: "Dept", BUILDING: "Bldg", STORE: "Store",
     ROOM: "Room", LAB: "Lab", JUNKYARD: "Junkyard",
@@ -47,6 +54,8 @@ function mapLocation(l: ApiLocation): Location {
     item_count: 0,
     custodian: "",
     is_active: l.is_active,
+    is_standalone: l.is_standalone,
+    is_store: l.is_store,
   };
 }
 
@@ -90,125 +99,268 @@ function Section({ n, title, sub, children }: { n: number; title: string; sub?: 
   );
 }
 
-function LocationPicker({ locations, value, onChange, lockedIds }: {
-  locations: Location[]; value: number[]; onChange: (v: number[]) => void;
-  lockedIds?: Set<number>;
+function LocationScopePicker({
+  locations,
+  value,
+  onChange,
+  readOnly = false,
+  autoSelectSingleStandalone = false,
+}: {
+  locations: AssignableLocation[];
+  value: number[];
+  onChange: (v: number[]) => void;
+  readOnly?: boolean;
+  autoSelectSingleStandalone?: boolean;
 }) {
-  const [q, setQ] = useState("");
-  const [expanded, setExpanded] = useState<Set<number>>(() => new Set());
-  const tree = useMemo(() => buildLocationTree(locations), [locations]);
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const byId = useMemo(() => new Map(locations.map(location => [location.id, location])), [locations]);
+  const hasRootScope = useMemo(
+    () => locations.some(location => location.parent_id === null && location.depth === 0),
+    [locations]
+  );
+  const standaloneLocations = useMemo(() => {
+    const nonRootStandalone = locations.filter(location => location.is_standalone && location.parent_id !== null);
+    return nonRootStandalone.length > 0
+      ? nonRootStandalone
+      : locations.filter(location => location.is_standalone);
+  }, [locations]);
+  const standaloneFixed = !hasRootScope && standaloneLocations.length === 1;
 
-  // Expand root nodes by default when tree loads
-  useEffect(() => {
-    if (tree.length > 0) {
-      setExpanded(new Set(tree.map(n => n.id)));
+  const isDescendantOf = (location: AssignableLocation, standaloneId: number) => {
+    let parentId = location.parent_id;
+    while (parentId) {
+      if (parentId === standaloneId) return true;
+      parentId = byId.get(parentId)?.parent_id ?? null;
     }
-  }, [tree]);
-
-  const visibleIds = useMemo(() => {
-    if (!q.trim()) return null;
-    const ids = new Set<number>();
-    const match = (loc: Location) => {
-      const qq = q.toLowerCase();
-      return loc.name.toLowerCase().includes(qq) || loc.code.toLowerCase().includes(qq);
-    };
-    const walk = (node: Location) => {
-      if (match(node)) {
-        ids.add(node.id);
-        let p = node.parent_id;
-        while (p) {
-          ids.add(p);
-          const parent = locations.find(l => l.id === p);
-          p = parent ? parent.parent_id : null;
-        }
-      }
-      (node.children || []).forEach(walk);
-    };
-    tree.forEach(walk);
-    return ids;
-  }, [q, locations, tree]);
-
-  const isChecked = (id: number) => value.includes(id);
-  const isLocked = (id: number) => !!lockedIds?.has(id);
-  const toggle = (id: number) => {
-    if (isLocked(id)) return;
-    onChange(isChecked(id) ? value.filter(v => v !== id) : [...value, id]);
+    return false;
   };
-  const toggleExpand = (id: number) => setExpanded(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const isExpanded = (id: number) => (q.trim() && visibleIds) ? visibleIds.has(id) : expanded.has(id);
 
-  const renderNode = (node: Location): React.ReactNode => {
-    if (visibleIds && !visibleIds.has(node.id)) return null;
-    const hasChildren = node.children && node.children.length > 0;
-    const locked = isLocked(node.id);
+  const descendantsByStandalone = useMemo(() => {
+    const map = new Map<number, AssignableLocation[]>();
+    standaloneLocations.forEach(standalone => {
+      map.set(
+        standalone.id,
+        locations.filter(location => location.id !== standalone.id && isDescendantOf(location, standalone.id))
+      );
+    });
+    return map;
+  }, [byId, locations, standaloneLocations]);
+
+  const valueSet = useMemo(() => new Set(value), [value]);
+  const selectedStandaloneIds = useMemo(() => {
+    const ids = standaloneLocations
+      .filter(standalone => {
+        if (valueSet.has(standalone.id)) return true;
+        return (descendantsByStandalone.get(standalone.id) ?? []).some(location => valueSet.has(location.id));
+      })
+      .map(standalone => standalone.id);
+    if (standaloneFixed && standaloneLocations[0] && !ids.includes(standaloneLocations[0].id)) {
+      ids.unshift(standaloneLocations[0].id);
+    }
+    return ids;
+  }, [descendantsByStandalone, standaloneFixed, standaloneLocations, valueSet]);
+
+  useEffect(() => {
+    if (
+      autoSelectSingleStandalone &&
+      !readOnly &&
+      standaloneFixed &&
+      standaloneLocations[0] &&
+      value.length === 0
+    ) {
+      onChange([standaloneLocations[0].id]);
+    }
+  }, [autoSelectSingleStandalone, onChange, readOnly, standaloneFixed, standaloneLocations, value.length]);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeDropdown = () => {
+      setOpen(false);
+      setQuery("");
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && rootRef.current?.contains(target)) return;
+      closeDropdown();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeDropdown();
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  const matchesQuery = (location: AssignableLocation) => {
+    const q = query.trim().toLowerCase();
+    if (!q) return true;
     return (
-      <div key={node.id} className="loc-node" data-depth={node.depth}>
-        <div className="loc-row">
-          {hasChildren ? (
-            <button type="button" className="loc-expand" onClick={() => toggleExpand(node.id)}>
-              <Ic d={isExpanded(node.id) ? "M6 9l6 6 6-6" : "M9 6l6 6-6 6"} size={12} />
-            </button>
-          ) : (
-            <span className="loc-expand loc-leaf"><span className="loc-dot" /></span>
-          )}
-          <label className={"loc-check" + (locked ? " locked" : "")} title={locked ? "Assigned by an upstream admin — cannot be removed." : undefined}>
-            <input
-              type="checkbox"
-              checked={isChecked(node.id)}
-              disabled={locked}
-              onChange={() => toggle(node.id)}
-            />
-            <span className="loc-name">{node.name}</span>
-            <span className="loc-kind mono">{node.kind}</span>
-            <span className="loc-code mono">{node.code}</span>
-            {locked && (
-              <Ic
-                d={<><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></>}
-                size={12}
-              />
-            )}
-          </label>
-        </div>
-        {hasChildren && isExpanded(node.id) && (
-          <div className="loc-children">{node.children!.map(renderNode)}</div>
-        )}
-      </div>
+      location.name.toLowerCase().includes(q) ||
+      location.code.toLowerCase().includes(q) ||
+      location.kind.toLowerCase().includes(q)
     );
   };
 
-  const selectedLocs = value.map(id => locations.find(l => l.id === id)).filter(Boolean) as Location[];
+  const toggleStandalone = (standalone: AssignableLocation) => {
+    if (readOnly || (standaloneFixed && standaloneLocations[0]?.id === standalone.id)) return;
+    const nextSet = new Set(value);
+    if (nextSet.has(standalone.id)) {
+      nextSet.delete(standalone.id);
+      (descendantsByStandalone.get(standalone.id) ?? []).forEach(location => nextSet.delete(location.id));
+    } else {
+      nextSet.add(standalone.id);
+    }
+    onChange(Array.from(nextSet));
+  };
+
+  const toggleSubLocation = (location: AssignableLocation) => {
+    if (readOnly) return;
+    const nextSet = new Set(value);
+    nextSet.has(location.id) ? nextSet.delete(location.id) : nextSet.add(location.id);
+    onChange(Array.from(nextSet));
+  };
+
+  const selectedLocations = value
+    .map(id => byId.get(id))
+    .filter(Boolean) as AssignableLocation[];
+  const selectedSummary = (() => {
+    if (selectedLocations.length === 0) return "Select assigned locations";
+    const names = selectedLocations.map(location => location.name);
+    const shown = names.slice(0, 2).join(", ");
+    return names.length > 2 ? `${shown} +${names.length - 2}` : shown;
+  })();
+  const visibleStandaloneRows = standaloneLocations
+    .map(standalone => {
+      const children = descendantsByStandalone.get(standalone.id) ?? [];
+      const expanded = selectedStandaloneIds.includes(standalone.id);
+      const q = query.trim();
+      const visibleChildren = expanded
+        ? children.filter(child => !q || matchesQuery(standalone) || matchesQuery(child))
+        : [];
+      if (!q || matchesQuery(standalone) || visibleChildren.length > 0) {
+        return { standalone, visibleChildren };
+      }
+      return null;
+    })
+    .filter(Boolean) as { standalone: AssignableLocation; visibleChildren: AssignableLocation[] }[];
 
   return (
-    <div className="location-picker">
-      <div className="loc-picker-search">
-        <Ic d={<><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></>} size={13} />
-        <input placeholder="Search locations by name or code…" value={q} onChange={e => setQ(e.target.value)} />
-        {q && <button type="button" className="clear-search" onClick={() => setQ("")}>×</button>}
-      </div>
-      <div className="loc-tree">{tree.map(renderNode)}</div>
-      {selectedLocs.length > 0 && (
-        <div className="loc-selected">
-          <div className="loc-selected-head">
-            <span className="eyebrow">Selected ({selectedLocs.length})</span>
-            <button type="button" className="btn-link" onClick={() => onChange([])}>Clear all</button>
-          </div>
-          <div className="loc-selected-chips">
-            {selectedLocs.map(l => {
-              const locked = isLocked(l.id);
-              return (
-                <span key={l.id} className={"chip chip-removable" + (locked ? " locked" : "")} title={locked ? "Assigned by an upstream admin — cannot be removed." : undefined}>
-                  {l.name}
-                  <button type="button" onClick={() => toggle(l.id)} disabled={locked} aria-label={locked ? "Locked" : "Remove"}>
-                    {locked ? (
-                      <Ic d={<><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></>} size={11} />
-                    ) : "×"}
-                  </button>
-                </span>
-              );
-            })}
-          </div>
+    <div className={"location-scope-picker" + (readOnly ? " read-only" : "")}>
+      <div ref={rootRef} className={"assignment-dropdown" + (open ? " open" : "") + (readOnly ? " disabled" : "")}>
+        <div
+          className="assignment-trigger"
+          onClick={() => {
+            if (readOnly) return;
+            setOpen(true);
+            requestAnimationFrame(() => inputRef.current?.focus());
+          }}
+        >
+          <Ic d={<><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></>} size={13} />
+          <input
+            ref={inputRef}
+            value={open ? query : (selectedLocations.length > 0 ? selectedSummary : "")}
+            placeholder={open ? "Search standalone locations..." : "Search assigned locations..."}
+            disabled={readOnly}
+            onFocus={() => {
+              if (readOnly) return;
+              setOpen(true);
+            }}
+            onChange={e => {
+              if (!open) setOpen(true);
+              setQuery(e.target.value);
+            }}
+          />
+          {open && query ? (
+            <button
+              type="button"
+              className="assignment-trigger-clear"
+              onClick={e => {
+                e.stopPropagation();
+                setQuery("");
+                requestAnimationFrame(() => inputRef.current?.focus());
+              }}
+              aria-label="Clear search"
+            >
+              ×
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="assignment-trigger-toggle"
+            onClick={e => {
+              e.stopPropagation();
+              if (readOnly) return;
+              setOpen(prev => !prev);
+              requestAnimationFrame(() => inputRef.current?.focus());
+            }}
+            disabled={readOnly}
+            aria-label={open ? "Close locations" : "Open locations"}
+          >
+            <Ic d={open ? "M18 15l-6-6-6 6" : "M6 9l6 6 6-6"} size={13} />
+          </button>
         </div>
-      )}
+
+        {open && !readOnly && (
+          <div className="assignment-menu">
+            <div className="assignment-list">
+              {visibleStandaloneRows.length > 0 ? visibleStandaloneRows.map(({ standalone, visibleChildren }) => {
+                const standaloneChecked = valueSet.has(standalone.id);
+                const fixedStandalone = standaloneFixed && standaloneLocations[0]?.id === standalone.id;
+                return (
+                  <div key={standalone.id} className="assignment-group">
+                    <button
+                      type="button"
+                      className={"assignment-row standalone" + (standaloneChecked ? " selected" : "") + (fixedStandalone ? " locked" : "")}
+                      onClick={() => toggleStandalone(standalone)}
+                      disabled={fixedStandalone}
+                    >
+                      <span className="assignment-check">{standaloneChecked ? "✓" : ""}</span>
+                      <span className="assignment-name">{standalone.name}</span>
+                      <span className="assignment-kind mono">{standalone.kind}</span>
+                      <span className="assignment-code mono">{standalone.code}</span>
+                    </button>
+                    {selectedStandaloneIds.includes(standalone.id) && visibleChildren.length > 0 && (
+                      <div className="assignment-children">
+                        {visibleChildren.map(child => {
+                          const checked = valueSet.has(child.id);
+                          return (
+                            <button
+                              key={child.id}
+                              type="button"
+                              className={"assignment-row child" + (checked ? " selected" : "")}
+                              onClick={() => toggleSubLocation(child)}
+                            >
+                              <span className="assignment-check">{checked ? "✓" : ""}</span>
+                              <span className="assignment-name">{child.name}</span>
+                              <span className="assignment-kind mono">{child.kind}</span>
+                              <span className="assignment-code mono">{child.code}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              }) : (
+                <div className="scope-empty">No matching standalone locations.</div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+      <div className="field-hint assignment-help">
+        {readOnly
+          ? "Your own assigned locations are locked."
+          : standaloneFixed
+            ? "Fixed to your assigned standalone location. Select optional sub-locations below it."
+            : "Select a standalone location to reveal its sub-locations."}
+      </div>
     </div>
   );
 }
@@ -238,7 +390,12 @@ function formFromUser(user: UserManagementDetail): FormState {
   };
 }
 
-function validate(f: FormState, touched: Set<string>, isEditMode: boolean): Record<string, string> {
+function validate(
+  f: FormState,
+  touched: Set<string>,
+  isEditMode: boolean,
+  options: { requireLocation?: boolean } = {},
+): Record<string, string> {
   const e: Record<string, string> = {};
   if (touched.has("first_name") && !f.first_name.trim()) e.first_name = "First name is required.";
   if (touched.has("last_name") && !f.last_name.trim()) e.last_name = "Last name is required.";
@@ -254,6 +411,8 @@ function validate(f: FormState, touched: Set<string>, isEditMode: boolean): Reco
   }
   if (touched.has("groups") && f.groups.length === 0)
     e.groups = "Assign at least one role / group.";
+  if (touched.has("locations") && options.requireLocation && f.locations.length === 0)
+    e.locations = "Select at least one location within your assigned scope.";
   return e;
 }
 
@@ -279,20 +438,13 @@ export function AddUserModal({
   canAssignLocations = false,
 }: AddUserModalProps) {
   const { user: currentUser } = useAuth();
-  // Locations assigned by an upstream admin cannot be removed when a user edits
-  // their own profile. Captured from the fetched detail so form edits don't
-  // affect the lock set.
-  const [originalLocations, setOriginalLocations] = useState<number[]>([]);
   const editingSelf =
     mode === "edit" &&
     !!currentUser &&
     !!user &&
     user.id === currentUser.id &&
     !currentUser.is_superuser;
-  const lockedLocationSet = useMemo(
-    () => new Set(editingSelf ? originalLocations : []),
-    [editingSelf, originalLocations]
-  );
+  const selfAssignmentLocked = editingSelf;
   const [form, setForm] = useState<FormState>(emptyForm);
   const [touched, setTouched] = useState<Set<string>>(() => new Set());
   const [submitting, setSubmitting] = useState(false);
@@ -302,7 +454,7 @@ export function AddUserModal({
 
   // Real data from API
   const [groups, setGroups] = useState<ApiGroup[]>([]);
-  const [locations, setLocations] = useState<Location[]>([]);
+  const [locations, setLocations] = useState<AssignableLocation[]>([]);
   const [groupsLoading, setGroupsLoading] = useState(false);
   const [locationsLoading, setLocationsLoading] = useState(false);
   const [dataLoadError, setDataLoadError] = useState<{ groups: string | null; locations: string | null }>({ groups: null, locations: null });
@@ -368,7 +520,6 @@ export function AddUserModal({
     setUserLoadError(null);
     setUserLoading(false);
     setForm(mode === "edit" && user ? formFromUser(user) : emptyForm());
-    setOriginalLocations(mode === "edit" && user ? (user.assigned_locations ?? []) : []);
   }, [open, mode, user]);
 
   useEffect(() => {
@@ -382,7 +533,6 @@ export function AddUserModal({
       .then(detail => {
         if (cancelled) return;
         setForm(formFromUser(detail));
-        setOriginalLocations(detail.assigned_locations ?? []);
       })
       .catch(err => {
         if (cancelled) return;
@@ -407,11 +557,15 @@ export function AddUserModal({
   const isEditMode = mode === "edit";
   const showRolesSection = isEditMode || canAssignRoles;
   const showLocationsSection = isEditMode || canAssignLocations;
-  const errors = validate(form, touched, isEditMode);
-  const set = (patch: Partial<FormState>) => setForm(f => ({ ...f, ...patch }));
-  const blur = (k: string) => setTouched(t => new Set(t).add(k));
   const groupsAvailable = !canAssignRoles || groups.length > 0;
   const locationsAvailable = !canAssignLocations || locations.length > 0;
+  const canCreateGlobalLocationScope =
+    !!currentUser?.is_superuser ||
+    locations.some(location => location.parent_id === null && location.depth === 0);
+  const requireLocationAssignment = canAssignLocations && !canCreateGlobalLocationScope && !selfAssignmentLocked;
+  const errors = validate(form, touched, isEditMode, { requireLocation: requireLocationAssignment });
+  const set = (patch: Partial<FormState>) => setForm(f => ({ ...f, ...patch }));
+  const blur = (k: string) => setTouched(t => new Set(t).add(k));
   const canSave = !submitting && !userLoading && !userLoadError;
   const loadStatusMessage = (() => {
     if (userLoadError) return `User details failed to load: ${userLoadError}`;
@@ -422,9 +576,9 @@ export function AddUserModal({
       if (!groupsAvailable) return "No groups are available right now. You can still save this user without role assignments.";
     }
     if (canAssignLocations) {
-      if (dataLoadError.locations) return `Locations failed to load: ${dataLoadError.locations} You can still save this user without location assignments.`;
+      if (dataLoadError.locations) return `Locations failed to load: ${dataLoadError.locations} Existing assignments can still be saved unchanged.`;
       if (locationsLoading) return "Loading locations…";
-      if (!locationsAvailable) return "No locations are available right now. You can still save this user without location assignments.";
+      if (!locationsAvailable) return "No locations are available right now.";
     }
     return null;
   })();
@@ -442,7 +596,7 @@ export function AddUserModal({
     if (canAssignLocations) allTouched.add("locations");
     if (canAssignRoles) allTouched.add("groups");
     setTouched(allTouched);
-    const errs = validate(form, allTouched, isEditMode);
+    const errs = validate(form, allTouched, isEditMode, { requireLocation: requireLocationAssignment });
     if (Object.keys(errs).length > 0) return;
     setSubmitting(true);
     setSubmitError(null);
@@ -555,13 +709,21 @@ export function AddUserModal({
 
           {/* 02 Select location */}
           {showLocationsSection && (
-            <Section n={2} title="Select location" sub="Leave locations empty to make this user global.">
+            <Section
+              n={2}
+              title="Select location"
+              sub={canCreateGlobalLocationScope ? "Root scope can assign users anywhere." : "Assignments are limited to your location scope."}
+            >
               <div className="location-section-layout" style={{ marginBottom: 14 }}>
                 <div className="field location-section-intro" style={{ marginBottom: 0 }}>
                   <div className="field-label">Location assignment</div>
                   <div className="field-hint">
-                    {canAssignLocations
-                      ? "Select one or more locations. Leave this empty to make the user global."
+                    {selfAssignmentLocked
+                      ? "Your own location assignments are locked."
+                      : canAssignLocations
+                      ? canCreateGlobalLocationScope
+                        ? "Select standalone locations and optional sub-locations. Leave empty only for a global user."
+                        : "Select the standalone location first, then choose optional sub-locations under it."
                       : "You can view this user's assigned locations, but you need location-assignment permission to change them."}
                   </div>
                 </div>
@@ -573,17 +735,24 @@ export function AddUserModal({
                   </div>
                 ) : dataLoadError.locations ? (
                   <div className="location-section-panel" style={{ padding: "12px 14px", border: "1px solid color-mix(in oklch, var(--warning) 30%, transparent)", borderRadius: "var(--radius)", background: "var(--warning-weak)", color: "var(--text-1)", fontSize: 13 }}>
-                    Location options are unavailable right now, but this user can still be saved as global with no locations selected.
+                    Location options are unavailable right now. Existing assignments can still be saved unchanged.
                   </div>
                 ) : locationsLoading ? (
                   <div className="location-section-panel" style={{ color: "var(--text-2)", fontSize: 13, padding: "12px 0" }}>Loading locations…</div>
                 ) : !locationsAvailable ? (
                   <div className="location-section-panel" style={{ padding: "12px 14px", border: "1px solid color-mix(in oklch, var(--warning) 30%, transparent)", borderRadius: "var(--radius)", background: "var(--warning-weak)", color: "var(--text-1)", fontSize: 13 }}>
-                    No locations are available right now. Leave this empty to keep the user global.
+                    No locations are available right now.
                   </div>
                 ) : (
                   <div className="location-section-panel">
-                    <LocationPicker locations={locations} value={form.locations} onChange={v => { set({ locations: v }); }} lockedIds={lockedLocationSet} />
+                    <LocationScopePicker
+                      locations={locations}
+                      value={form.locations}
+                      onChange={v => { set({ locations: v }); blur("locations"); }}
+                      readOnly={selfAssignmentLocked}
+                      autoSelectSingleStandalone={!isEditMode}
+                    />
+                    {errors.locations && <div className="field-error" style={{ marginTop: 8 }}>{errors.locations}</div>}
                   </div>
                 )}
               </div>
@@ -592,7 +761,11 @@ export function AddUserModal({
 
           {/* 03 Groups */}
           {showRolesSection && (
-            <Section n={showLocationsSection ? 3 : 2} title="Roles / Groups" sub="Pick one or more role bundles. Permissions accumulate across groups.">
+            <Section
+              n={showLocationsSection ? 3 : 2}
+              title="Roles / Groups"
+              sub={selfAssignmentLocked ? "Your own assigned roles are locked." : "Pick one or more role bundles. Permissions accumulate across groups."}
+            >
               {!canAssignRoles ? (
                 <div style={{ padding: "12px 14px", border: "1px solid color-mix(in oklch, var(--border) 70%, transparent)", borderRadius: "var(--radius)", background: "var(--panel)", color: "var(--text-1)", fontSize: 13 }}>
                   {groups.length > 0
@@ -615,9 +788,19 @@ export function AddUserModal({
                 <div className={"group-grid" + (errors.groups ? " has-error" : "")}>
                   {groups.map(g => {
                     const checked = form.groups.includes(g.id);
+                    const disabled = selfAssignmentLocked;
                     return (
-                      <label key={g.id} className={"group-card" + (checked ? " selected" : "")}>
-                        <input type="checkbox" checked={checked} onChange={e => { set({ groups: e.target.checked ? [...form.groups, g.id] : form.groups.filter(x => x !== g.id) }); blur("groups"); }} />
+                      <label key={g.id} className={"group-card" + (checked ? " selected" : "") + (disabled ? " disabled" : "")}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={disabled}
+                          onChange={e => {
+                            if (disabled) return;
+                            set({ groups: e.target.checked ? [...form.groups, g.id] : form.groups.filter(x => x !== g.id) });
+                            blur("groups");
+                          }}
+                        />
                         <div className="group-card-body">
                           <div className="group-card-head">
                             <span className="group-card-name">{g.name}</span>

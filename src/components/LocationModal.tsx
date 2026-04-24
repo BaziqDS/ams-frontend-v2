@@ -45,6 +45,7 @@ function Section({ n, title, sub, children }: { n: number; title: string; sub?: 
 type LocationFormState = {
   name: string;
   code: string;
+  main_store_name: string;
   parent_location: string;
   location_type: string;
   is_active: boolean;
@@ -58,6 +59,7 @@ function emptyForm(): LocationFormState {
   return {
     name: "",
     code: "",
+    main_store_name: "",
     parent_location: "",
     location_type: "DEPARTMENT",
     is_active: true,
@@ -74,6 +76,7 @@ function formFromLocation(location: LocationRecord | null): LocationFormState {
   return {
     name: location.name ?? "",
     code: location.code ?? "",
+    main_store_name: "",
     parent_location: location.parent_location == null ? "" : String(location.parent_location),
     location_type: location.location_type ?? "DEPARTMENT",
     is_active: Boolean(location.is_active),
@@ -88,6 +91,7 @@ function toPayload(form: LocationFormState) {
   return {
     name: form.name.trim(),
     code: form.code.trim(),
+    main_store_name: form.main_store_name.trim(),
     parent_location: form.parent_location ? Number(form.parent_location) : null,
     location_type: form.location_type,
     is_active: form.is_active,
@@ -98,15 +102,19 @@ function toPayload(form: LocationFormState) {
   };
 }
 
+type LocationCreateContext = "default" | "standalone" | "child";
+
 interface LocationModalProps {
   open: boolean;
   mode: "create" | "edit";
   location?: LocationRecord | null;
+  createContext?: LocationCreateContext;
+  lockedParent?: LocationRecord | null;
   onClose: () => void;
   onSave?: () => void | Promise<void>;
 }
 
-export function LocationModal({ open, mode, location, onClose, onSave }: LocationModalProps) {
+export function LocationModal({ open, mode, location, createContext = "default", lockedParent, onClose, onSave }: LocationModalProps) {
   const [form, setForm] = useState<LocationFormState>(emptyForm);
   const [touched, setTouched] = useState<Set<string>>(() => new Set());
   const [submitting, setSubmitting] = useState(false);
@@ -118,13 +126,20 @@ export function LocationModal({ open, mode, location, onClose, onSave }: Locatio
   useEffect(() => {
     if (!open) return;
 
-    setForm(formFromLocation(location ?? null));
+    const nextForm = formFromLocation(location ?? null);
+    if (mode === "create" && createContext === "child" && lockedParent) {
+      nextForm.parent_location = String(lockedParent.id);
+    }
+    setForm(nextForm);
     setTouched(new Set());
     setSubmitting(false);
     setSubmitError(null);
     setParentLocations([]);
-    setParentLoading(true);
+    const needsParentOptions = mode === "edit" || createContext === "default";
+    setParentLoading(needsParentOptions);
     setParentError(null);
+
+    if (!needsParentOptions) return;
 
     let cancelled = false;
 
@@ -146,7 +161,7 @@ export function LocationModal({ open, mode, location, onClose, onSave }: Locatio
     return () => {
       cancelled = true;
     };
-  }, [open, location]);
+  }, [createContext, lockedParent, mode, open, location]);
 
   useEffect(() => {
     if (!open) return;
@@ -158,28 +173,40 @@ export function LocationModal({ open, mode, location, onClose, onSave }: Locatio
   }, [open, onClose]);
 
   const isEditMode = mode === "edit";
+  const showParentSelector = !isEditMode && createContext === "default";
+  const isClassificationOnly = !showParentSelector;
   const errors = {
     name: touched.has("name") && !form.name.trim() ? "Location name is required." : undefined,
     location_type: touched.has("location_type") && !form.location_type.trim() ? "Location type is required." : undefined,
   };
+  const issueCount = Object.values(errors).filter(Boolean).length;
 
-  const canSave = Boolean(form.name.trim() && form.location_type.trim()) && !submitting && !parentLoading && !parentError;
+  const canSave = !submitting && !parentLoading && !parentError && !(createContext === "child" && !lockedParent && !isEditMode);
 
   const loadStatusMessage = useMemo(() => {
+    if (!isEditMode && createContext === "standalone") return "A main store will be created automatically for this location.";
+    if (!isEditMode && createContext === "child" && lockedParent) return `Creating sub-location under ${lockedParent.name}.`;
     if (parentError) return `Parent locations failed to load: ${parentError}`;
     if (parentLoading) return "Loading parent locations…";
     if (parentLocations.length === 0) return "No parent locations were returned. Root locations can still be saved without a parent.";
     return null;
-  }, [parentError, parentLoading, parentLocations.length]);
+  }, [createContext, isEditMode, lockedParent, parentError, parentLoading, parentLocations.length]);
 
   const set = (patch: Partial<LocationFormState>) => setForm(prev => ({ ...prev, ...patch }));
 
   const submit = async () => {
-    setTouched(new Set(["name", "location_type"]));
+    const allTouched = new Set(["name", "location_type"]);
+    setTouched(allTouched);
     if (!canSave) {
       setSubmitError(parentError ? "Parent locations must finish loading before this location can be saved." : "Please complete the required fields.");
       return;
     }
+
+    const nextErrors = {
+      name: !form.name.trim() ? "Location name is required." : undefined,
+      location_type: !form.location_type.trim() ? "Location type is required." : undefined,
+    };
+    if (Object.values(nextErrors).some(Boolean)) return;
 
     setSubmitting(true);
     setSubmitError(null);
@@ -192,7 +219,12 @@ export function LocationModal({ open, mode, location, onClose, onSave }: Locatio
           body,
         });
       } else {
-        await apiFetch("/api/inventory/locations/", {
+        const createPath = createContext === "standalone"
+          ? "/api/inventory/locations/standalone/"
+          : createContext === "child" && lockedParent
+          ? `/api/inventory/locations/${lockedParent.id}/children/`
+          : "/api/inventory/locations/";
+        await apiFetch(createPath, {
           method: "POST",
           body,
         });
@@ -244,6 +276,11 @@ export function LocationModal({ open, mode, location, onClose, onSave }: Locatio
                   <Field label="Location code" hint="Leave blank to let the backend generate one.">
                     <input value={form.code} onChange={e => set({ code: e.target.value.toUpperCase() })} placeholder="Enter location code" />
                   </Field>
+                  {!isEditMode && createContext === "standalone" && (
+                    <Field label="Main store name" hint="Blank uses the location name followed by Main Store." span={2}>
+                      <input value={form.main_store_name} onChange={e => set({ main_store_name: e.target.value })} placeholder="Optional main store name" />
+                    </Field>
+                  )}
                   <Field label="Active state" span={2}>
                     <div className="seg seg-inline">
                       <button type="button" className={"seg-btn" + (form.is_active ? " active" : "")} onClick={() => set({ is_active: true })}>Active</button>
@@ -253,17 +290,23 @@ export function LocationModal({ open, mode, location, onClose, onSave }: Locatio
                 </div>
               </Section>
 
-              <Section n={2} title="Hierarchy" sub="Parenting and location classification.">
+              <Section
+                n={2}
+                title={isClassificationOnly ? "Classification" : "Hierarchy"}
+                sub={isClassificationOnly ? "Choose how this location is categorized." : "Parenting and location classification."}
+              >
                 <div className="form-grid cols-2">
-                  <Field label="Parent location" hint="Leave empty for a root location.">
-                    <select value={form.parent_location} onChange={e => set({ parent_location: e.target.value })} disabled={parentLoading || Boolean(parentError)}>
-                      <option value="">No parent</option>
-                      {parentLocations.map(parent => (
-                        <option key={parent.id} value={parent.id}>{parent.name} · {parent.code} · {locationTypeLabel(parent.location_type)}</option>
-                      ))}
-                    </select>
-                  </Field>
-                  <Field label="Location type" required error={errors.location_type}>
+                  {showParentSelector && (
+                    <Field label="Parent location" hint="Leave empty for a root location.">
+                      <select value={form.parent_location} onChange={e => set({ parent_location: e.target.value })} disabled={parentLoading || Boolean(parentError)}>
+                        <option value="">No parent</option>
+                        {parentLocations.map(parent => (
+                          <option key={parent.id} value={parent.id}>{parent.name} · {parent.code} · {locationTypeLabel(parent.location_type)}</option>
+                        ))}
+                      </select>
+                    </Field>
+                  )}
+                  <Field label="Location type" required error={errors.location_type} span={isClassificationOnly ? 2 : 1}>
                     <select value={form.location_type} onChange={e => set({ location_type: e.target.value })} onBlur={() => setTouched(prev => new Set(prev).add("location_type"))}>
                       {Object.entries(LOCATION_TYPE_LABELS).map(([value, label]) => (
                         <option key={value} value={value}>{label}</option>
@@ -294,7 +337,15 @@ export function LocationModal({ open, mode, location, onClose, onSave }: Locatio
         </div>
 
         <footer className="modal-foot">
-          <div className="modal-foot-meta mono">{parentError ? <span className="foot-err">{parentError}</span> : <span className="foot-ok">{parentLoading ? "Loading parent locations…" : `${locationTypeLabel(form.location_type)} location ready`}</span>}</div>
+          <div className="modal-foot-meta mono">
+            {parentError
+              ? <span className="foot-err">{parentError}</span>
+              : parentLoading
+                ? <span className="foot-err">Loading parent locations…</span>
+                : issueCount > 0
+                  ? <span className="foot-err">{issueCount} issue{issueCount > 1 ? "s" : ""} to resolve</span>
+                  : <span className="foot-ok">{locationTypeLabel(form.location_type)} location ready</span>}
+          </div>
           <div className="modal-foot-actions">
             <button type="button" className="btn btn-md" onClick={onClose}>Cancel</button>
             <button type="button" className="btn btn-md btn-primary" onClick={submit} disabled={!canSave}>{submitting ? "Saving…" : isEditMode ? "Save changes" : "Create location"}</button>

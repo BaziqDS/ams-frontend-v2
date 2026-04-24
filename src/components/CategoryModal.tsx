@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { apiFetch, type Page } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 
 const Ic = ({ d, size = 16 }: { d: ReactNode | string; size?: number }) => (
   <svg aria-hidden="true" focusable="false" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
@@ -41,15 +41,21 @@ function Section({ n, title, sub, children }: { n: number; title: string; sub?: 
   );
 }
 
-type CategoryRecord = {
+export type CategoryRecord = {
   id: number;
   name: string;
   code: string;
   parent_category: number | null;
+  parent_category_display?: string | null;
   category_type: string | null;
   tracking_type: string | null;
   default_depreciation_rate: string | number | null;
+  resolved_category_type?: string | null;
+  resolved_tracking_type?: string | null;
+  resolved_depreciation_rate?: string | number | null;
   is_active: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
   notes?: string | null;
 };
 
@@ -92,99 +98,65 @@ function formFromCategory(category: CategoryRecord | null): CategoryFormState {
   };
 }
 
+function inheritedFormPatch(parent: CategoryRecord): Partial<CategoryFormState> {
+  const inheritedType = parent.resolved_category_type ?? parent.category_type ?? "";
+  const inheritedRate = parent.resolved_depreciation_rate ?? parent.default_depreciation_rate;
+
+  return {
+    category_type: inheritedType,
+    default_depreciation_rate: inheritedType === "FIXED_ASSET" && inheritedRate != null ? String(inheritedRate) : "",
+  };
+}
+
 function toPayload(form: CategoryFormState) {
   const depreciation = form.default_depreciation_rate.trim();
+  const isFixedAsset = form.category_type === "FIXED_ASSET";
+  const parentSelected = Boolean(form.parent_category);
 
   return {
     name: form.name.trim(),
     code: form.code.trim().toUpperCase(),
     parent_category: form.parent_category ? Number(form.parent_category) : null,
     category_type: form.category_type.trim() || null,
-    tracking_type: form.tracking_type.trim() || null,
-    default_depreciation_rate: depreciation === "" ? null : Number(depreciation),
+    tracking_type: parentSelected ? form.tracking_type.trim() || null : null,
+    default_depreciation_rate: isFixedAsset && depreciation !== "" ? Number(depreciation) : null,
     is_active: form.is_active,
     notes: form.notes.trim(),
   };
 }
 
-function formatOptionLabel(category: CategoryRecord) {
-  return `${category.name} · ${category.code}`;
-}
-
-function buildDescendantExclusionSet(categories: CategoryRecord[], rootId: number) {
-  const byParent = new Map<number | null, CategoryRecord[]>();
-
-  for (const item of categories) {
-    const siblings = byParent.get(item.parent_category) ?? [];
-    siblings.push(item);
-    byParent.set(item.parent_category, siblings);
-  }
-
-  const excluded = new Set<number>([rootId]);
-  const stack = [...(byParent.get(rootId) ?? [])];
-
-  while (stack.length > 0) {
-    const node = stack.pop()!;
-    if (excluded.has(node.id)) continue;
-    excluded.add(node.id);
-    const children = byParent.get(node.id) ?? [];
-    for (const child of children) stack.push(child);
-  }
-
-  return excluded;
-}
+type CategoryCreateContext = "root" | "child" | "edit";
 
 interface CategoryModalProps {
   open: boolean;
   mode: "create" | "edit";
   category?: CategoryRecord | null;
+  createContext?: CategoryCreateContext;
+  lockedParent?: CategoryRecord | null;
   onClose: () => void;
   onSave?: () => void | Promise<void>;
 }
 
-export function CategoryModal({ open, mode, category, onClose, onSave }: CategoryModalProps) {
+export function CategoryModal({ open, mode, category, createContext = "root", lockedParent, onClose, onSave }: CategoryModalProps) {
   const isEditMode = mode === "edit";
   const [form, setForm] = useState<CategoryFormState>(emptyForm);
   const [touched, setTouched] = useState<Set<string>>(() => new Set());
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [parentCategories, setParentCategories] = useState<CategoryRecord[]>([]);
-  const [parentLoading, setParentLoading] = useState(false);
-  const [parentError, setParentError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
 
-    setForm(formFromCategory(category ?? null));
+    const nextForm = formFromCategory(category ?? null);
+    if (!isEditMode && createContext === "child" && lockedParent) {
+      nextForm.parent_category = String(lockedParent.id);
+      Object.assign(nextForm, inheritedFormPatch(lockedParent));
+    }
+    setForm(nextForm);
     setTouched(new Set());
     setSubmitting(false);
     setSubmitError(null);
-    setParentCategories([]);
-    setParentLoading(true);
-    setParentError(null);
-
-    let cancelled = false;
-
-    apiFetch<Page<CategoryRecord> | CategoryRecord[]>("/api/inventory/categories/?page_size=500")
-      .then(data => {
-        if (cancelled) return;
-        const records = Array.isArray(data) ? data : data.results;
-        const excludedIds = isEditMode && category?.id ? buildDescendantExclusionSet(records, category.id) : null;
-        const options = excludedIds ? records.filter(item => !excludedIds.has(item.id)) : records;
-        setParentCategories(options);
-      })
-      .catch(err => {
-        if (cancelled) return;
-        setParentError(err instanceof Error ? err.message : "Failed to load parent categories.");
-      })
-      .finally(() => {
-        if (!cancelled) setParentLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [open, category, isEditMode]);
+  }, [open, category, createContext, isEditMode, lockedParent]);
 
   useEffect(() => {
     if (!open) return;
@@ -196,26 +168,23 @@ export function CategoryModal({ open, mode, category, onClose, onSave }: Categor
   }, [open, onClose]);
 
   const parentSelected = Boolean(form.parent_category);
+  const isFixedAsset = form.category_type === "FIXED_ASSET";
+  const showTrackingType = parentSelected;
+  const trackingTypeLocked = isEditMode && parentSelected;
   const errors = {
     name: touched.has("name") && !form.name.trim() ? "Category name is required." : undefined,
     category_type: touched.has("category_type") && !parentSelected && !form.category_type.trim() ? "Category type is required for top-level categories." : undefined,
-    tracking_type: touched.has("tracking_type") && parentSelected && !form.tracking_type.trim() ? "Tracking type is required for subcategories." : undefined,
-    default_depreciation_rate: touched.has("default_depreciation_rate") && form.default_depreciation_rate.trim() !== "" && !Number.isFinite(Number(form.default_depreciation_rate)) ? "Enter a valid depreciation rate." : undefined,
+    tracking_type: touched.has("tracking_type") && showTrackingType && !trackingTypeLocked && !form.tracking_type.trim() ? "Tracking type is required for subcategories." : undefined,
+    default_depreciation_rate: touched.has("default_depreciation_rate") && isFixedAsset && form.default_depreciation_rate.trim() !== "" && !Number.isFinite(Number(form.default_depreciation_rate)) ? "Enter a valid depreciation rate." : undefined,
   };
+  const issueCount = Object.values(errors).filter(Boolean).length;
 
-  const canSave = Boolean(
-    form.name.trim() &&
-    (parentSelected || form.category_type.trim()) &&
-    (!parentSelected || form.tracking_type.trim()) &&
-    (form.default_depreciation_rate.trim() === "" || Number.isFinite(Number(form.default_depreciation_rate)))
-  ) && !submitting && !parentLoading;
+  const canSave = !submitting && !(createContext === "child" && !lockedParent && !isEditMode);
 
   const loadStatusMessage = useMemo(() => {
-    if (parentError) return `Parent categories failed to load: ${parentError}`;
-    if (parentLoading) return "Loading parent categories…";
-    if (parentCategories.length === 0) return "No parent categories were returned. Top-level categories can still be saved without a parent.";
+    if (!isEditMode && createContext === "child" && lockedParent) return `Creating subcategory under ${lockedParent.name}.`;
     return null;
-  }, [parentError, parentLoading, parentCategories.length]);
+  }, [createContext, isEditMode, lockedParent]);
 
   const set = (patch: Partial<CategoryFormState>) => setForm(prev => ({ ...prev, ...patch }));
 
@@ -224,9 +193,19 @@ export function CategoryModal({ open, mode, category, onClose, onSave }: Categor
     setTouched(touchedFields);
 
     if (!canSave) {
-      setSubmitError(parentLoading ? "Parent categories must finish loading before this category can be saved." : "Please complete the required fields.");
+      setSubmitError("Please complete the required fields.");
       return;
     }
+
+    const nextParentSelected = Boolean(form.parent_category);
+    const nextIsFixedAsset = form.category_type === "FIXED_ASSET";
+    const nextErrors = {
+      name: !form.name.trim() ? "Category name is required." : undefined,
+      category_type: !nextParentSelected && !form.category_type.trim() ? "Category type is required for top-level categories." : undefined,
+      tracking_type: nextParentSelected && !(isEditMode && nextParentSelected) && !form.tracking_type.trim() ? "Tracking type is required for subcategories." : undefined,
+      default_depreciation_rate: nextIsFixedAsset && form.default_depreciation_rate.trim() !== "" && !Number.isFinite(Number(form.default_depreciation_rate)) ? "Enter a valid depreciation rate." : undefined,
+    };
+    if (Object.values(nextErrors).some(Boolean)) return;
 
     setSubmitting(true);
     setSubmitError(null);
@@ -300,34 +279,40 @@ export function CategoryModal({ open, mode, category, onClose, onSave }: Categor
                 </div>
               </Section>
 
-              <Section n={2} title="Classification" sub="Hierarchy, category type, and tracking rules.">
+              <Section n={2} title="Classification" sub="Category type and tracking rules.">
                 <div className="form-grid cols-2">
-                  <Field label="Parent category" hint="Leave empty for a top-level category.">
-                    <select value={form.parent_category} onChange={e => set({ parent_category: e.target.value })} disabled={parentLoading || Boolean(parentError)}>
-                      <option value="">No parent</option>
-                      {parentCategories.map(parent => (
-                        <option key={parent.id} value={parent.id}>{formatOptionLabel(parent)}</option>
-                      ))}
-                    </select>
-                  </Field>
                   <Field label="Category type" required={!parentSelected} error={errors.category_type} hint={parentSelected ? "Optional for subcategories; inherited from the parent when left blank." : undefined}>
-                    <select value={form.category_type} onChange={e => set({ category_type: e.target.value })} onBlur={() => setTouched(prev => new Set(prev).add("category_type"))}>
+                    <select
+                      value={form.category_type}
+                      onChange={e => {
+                        const categoryType = e.target.value;
+                        set({
+                          category_type: categoryType,
+                          default_depreciation_rate: categoryType === "FIXED_ASSET" ? form.default_depreciation_rate : "",
+                        });
+                      }}
+                      onBlur={() => setTouched(prev => new Set(prev).add("category_type"))}
+                    >
                       <option value="">Select category type</option>
                       <option value="FIXED_ASSET">Fixed Asset</option>
                       <option value="CONSUMABLE">Consumable</option>
                       <option value="PERISHABLE">Perishable</option>
                     </select>
                   </Field>
-                  <Field label="Tracking type" required={parentSelected} error={errors.tracking_type} hint={parentSelected ? "Required for subcategories." : "Optional for top-level categories."}>
-                    <select value={form.tracking_type} onChange={e => set({ tracking_type: e.target.value })} onBlur={() => setTouched(prev => new Set(prev).add("tracking_type"))}>
-                      <option value="">Select tracking type</option>
-                      <option value="INDIVIDUAL">Individual Tracking (Serial/QR)</option>
-                      <option value="BATCH">Batch Tracking (FIFO/Expiry)</option>
-                    </select>
-                  </Field>
-                  <Field label="Default depreciation rate" error={errors.default_depreciation_rate} hint="Use a percentage value such as 25 or 25.00.">
-                    <input value={form.default_depreciation_rate} onChange={e => set({ default_depreciation_rate: e.target.value })} onBlur={() => setTouched(prev => new Set(prev).add("default_depreciation_rate"))} placeholder="Enter depreciation rate" inputMode="decimal" />
-                  </Field>
+                  {showTrackingType && (
+                    <Field label="Tracking type" required={!trackingTypeLocked} error={errors.tracking_type} hint={trackingTypeLocked ? "Tracking type is locked after subcategory creation." : "Required for subcategories."}>
+                      <select value={form.tracking_type} onChange={e => set({ tracking_type: e.target.value })} onBlur={() => setTouched(prev => new Set(prev).add("tracking_type"))} disabled={trackingTypeLocked}>
+                        <option value="">Select tracking type</option>
+                        <option value="INDIVIDUAL">Individual Tracking (Serial/QR)</option>
+                        <option value="BATCH">Batch Tracking (FIFO/Expiry)</option>
+                      </select>
+                    </Field>
+                  )}
+                  {isFixedAsset && (
+                    <Field label="Default depreciation rate" error={errors.default_depreciation_rate} hint="Use a percentage value such as 25 or 25.00.">
+                      <input value={form.default_depreciation_rate} onChange={e => set({ default_depreciation_rate: e.target.value })} onBlur={() => setTouched(prev => new Set(prev).add("default_depreciation_rate"))} placeholder="Enter depreciation rate" inputMode="decimal" />
+                    </Field>
+                  )}
                 </div>
               </Section>
 
@@ -343,7 +328,11 @@ export function CategoryModal({ open, mode, category, onClose, onSave }: Categor
         </div>
 
         <footer className="modal-foot">
-          <div className="modal-foot-meta mono">{parentError ? <span className="foot-err">{parentError}</span> : <span className="foot-ok">{parentLoading ? "Loading parent categories…" : `${form.parent_category ? "Subcategory" : "Top-level category"} ready`}</span>}</div>
+          <div className="modal-foot-meta mono">
+            {issueCount > 0
+              ? <span className="foot-err">{issueCount} issue{issueCount > 1 ? "s" : ""} to resolve</span>
+              : <span className="foot-ok">{form.parent_category ? "Subcategory ready" : "Top-level category ready"}</span>}
+          </div>
           <div className="modal-foot-actions">
             <button type="button" className="btn btn-md" onClick={onClose}>Cancel</button>
             <button type="button" className="btn btn-md btn-primary" onClick={submit} disabled={!canSave}>{submitting ? "Saving…" : isEditMode ? "Save changes" : "Create category"}</button>

@@ -1,0 +1,91 @@
+import { describe, expect, it } from "vitest";
+import {
+  canShowInstances,
+  findDistributionUnit,
+  flattenDistributionDetails,
+  itemStatusTone,
+  type ItemDistributionUnit,
+} from "./itemUi";
+
+const units: ItemDistributionUnit[] = [
+  {
+    id: 10,
+    name: "CSIT",
+    code: "CIS",
+    totalQuantity: 5,
+    availableQuantity: 1,
+    inTransitQuantity: 0,
+    allocatedQuantity: 4,
+    stores: [
+      {
+        id: 1,
+        locationId: 100,
+        locationName: "CSIT Main Store",
+        isStore: true,
+        batchNumber: "B-001",
+        batchId: 1,
+        quantity: 3,
+        availableQuantity: 1,
+        inTransitQuantity: 0,
+        allocatedTotal: 2,
+        lastUpdated: "2026-04-20T10:00:00Z",
+      },
+    ],
+    allocations: [
+      {
+        id: 7,
+        targetName: "Dr. A. Khan",
+        targetType: "PERSON",
+        targetLocationId: null,
+        sourceStoreId: 100,
+        sourceStoreName: "CSIT Main Store",
+        batchNumber: "B-001",
+        batchId: 1,
+        quantity: 2,
+        allocatedAt: "2026-04-20T11:00:00Z",
+        stockEntryIds: [55],
+      },
+      {
+        id: 8,
+        targetName: "CIS Lab B",
+        targetType: "LOCATION",
+        targetLocationId: 102,
+        sourceStoreId: 100,
+        sourceStoreName: "CSIT Main Store",
+        batchNumber: null,
+        batchId: null,
+        quantity: 2,
+        allocatedAt: "2026-04-20T12:00:00Z",
+        stockEntryIds: [56],
+      },
+    ],
+  },
+];
+
+describe("item UI helpers", () => {
+  it("only exposes instance browsing for individually tracked items", () => {
+    expect(canShowInstances("INDIVIDUAL")).toBe(true);
+    expect(canShowInstances("BATCH")).toBe(false);
+    expect(canShowInstances(null)).toBe(false);
+  });
+
+  it("finds a standalone distribution unit by route param", () => {
+    expect(findDistributionUnit(units, "10")?.name).toBe("CSIT");
+    expect(findDistributionUnit(units, "missing")).toBeNull();
+  });
+
+  it("flattens store and allocation rows for standalone detail pages", () => {
+    expect(flattenDistributionDetails(units[0])).toEqual([
+      expect.objectContaining({ kind: "store", name: "CSIT Main Store", quantity: 3 }),
+      expect.objectContaining({ kind: "person", name: "Dr. A. Khan", quantity: 2 }),
+      expect.objectContaining({ kind: "location", name: "CIS Lab B", quantity: 2 }),
+    ]);
+  });
+
+  it("marks zero availability with a warning tone", () => {
+    expect(itemStatusTone({ total_quantity: 10, available_quantity: 0, is_active: true })).toBe("warning");
+    expect(itemStatusTone({ total_quantity: 0, available_quantity: 0, is_active: true })).toBe("neutral");
+    expect(itemStatusTone({ total_quantity: 4, available_quantity: 2, is_active: true })).toBe("success");
+    expect(itemStatusTone({ total_quantity: 4, available_quantity: 2, is_active: false })).toBe("disabled");
+  });
+});

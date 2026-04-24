@@ -368,8 +368,9 @@ function RoleModal({
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
-  const canSave = !!name.trim() && !submitting;
+  const canSave = !submitting;
   const nameError = touched && !name.trim() ? "Role name is required." : null;
+  const issueCount = nameError ? 1 : 0;
   const grantedCount = Object.values(selections).filter(Boolean).length;
   const moduleKeys = useMemo(() => Object.keys(manifest), [manifest]);
   const dependencyMinimums = useMemo(
@@ -549,7 +550,13 @@ function RoleModal({
           )}
         </div>
         <footer className="modal-foot">
-          <div className="modal-foot-meta mono">{submitError ? <span className="foot-err">{submitError}</span> : <span className="foot-ok">{readyNote}</span>}</div>
+          <div className="modal-foot-meta mono">
+            {submitError
+              ? <span className="foot-err">{submitError}</span>
+              : issueCount > 0
+                ? <span className="foot-err">{issueCount} issue to resolve</span>
+                : <span className="foot-ok">{readyNote}</span>}
+          </div>
           <div className="modal-foot-actions">
             <button type="button" className="btn btn-md" onClick={onClose}>Cancel</button>
             <button type="button" className="btn btn-md btn-primary" onClick={submit} disabled={!canSave}>{submitting ? "Saving…" : mode === "edit" ? "Save changes" : "Create role"}</button>

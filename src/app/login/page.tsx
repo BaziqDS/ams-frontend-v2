@@ -85,9 +85,7 @@ export default function LoginPage() {
             </div>
           </div>
           <div className="login-v2-foot">
-            <span className="mono">© 2026 NED UET</span>
-            <span>·</span>
-            <span>Secured by NED ICT</span>
+            <span>Copyright © NED University of Engineering &amp; Technology, 2026</span>
           </div>
         </div>
       </div>
@@ -95,11 +93,6 @@ export default function LoginPage() {
       {/* Right — form */}
       <div className="login-v2-right">
         <div className="login-v2-form-frame">
-          <div className="login-v2-badge">
-            <span className="status-dot active" />
-            <span>Official system access</span>
-          </div>
-
           <div className="login-v2-head">
             <h1>Welcome back</h1>
             <p>Sign in to continue. Your access is scoped to your assigned locations and roles.</p>
@@ -178,22 +171,7 @@ export default function LoginPage() {
                 </svg>
               )}
             </button>
-
-            <div className="login-sso">
-              <div className="login-sso-divider"><span>or continue with</span></div>
-              <button type="button" className="btn" style={{ width: "100%" }}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/>
-                </svg>
-                NED Single Sign-On
-              </button>
-            </div>
           </form>
-
-          <div className="login-v2-help">
-            <div>Need access?</div>
-            <a href="#">Contact your Department Head</a>
-          </div>
         </div>
       </div>
     </div>

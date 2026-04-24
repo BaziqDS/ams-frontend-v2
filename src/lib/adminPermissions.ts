@@ -26,6 +26,12 @@ export const ADMIN_PERMISSIONS = {
     change: "inventory.edit_categories",
     delete: "inventory.delete_categories",
   },
+  items: {
+    view: "inventory.view_items",
+    add: "inventory.create_items",
+    change: "inventory.edit_items",
+    delete: "inventory.delete_items",
+  },
 } as const;
 
 export const PROTECTED_ADMIN_ROUTES = {
@@ -33,6 +39,7 @@ export const PROTECTED_ADMIN_ROUTES = {
   "/roles": ADMIN_PERMISSIONS.roles.view,
   "/locations": ADMIN_PERMISSIONS.locations.view,
   "/categories": ADMIN_PERMISSIONS.categories.view,
+  "/items": ADMIN_PERMISSIONS.items.view,
 } as const;
 
 export function hasPermission(userPermissions: string[] | undefined, requiredPermission: string) {

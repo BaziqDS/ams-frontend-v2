@@ -21,7 +21,7 @@ type NavGroup = {
   items: NavItem[];
 };
 
-const IMPLEMENTED_ROUTES = new Set(["/dashboard", "/users", "/roles", "/locations", "/categories"]);
+const IMPLEMENTED_ROUTES = new Set(["/dashboard", "/users", "/roles", "/locations", "/categories", "/items"]);
 
 const NavIcon = ({ d, size = 18 }: { d: React.ReactNode | string; size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }} aria-hidden="true" focusable="false">
