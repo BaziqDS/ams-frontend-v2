@@ -88,12 +88,15 @@ function formFromLocation(location: LocationRecord | null): LocationFormState {
 }
 
 function toPayload(form: LocationFormState) {
+  const isStore = form.location_type === "STORE";
+
   return {
     name: form.name.trim(),
     code: form.code.trim(),
     main_store_name: form.main_store_name.trim(),
     parent_location: form.parent_location ? Number(form.parent_location) : null,
     location_type: form.location_type,
+    is_store: isStore,
     is_active: form.is_active,
     description: form.description.trim() || null,
     address: form.address.trim() || null,

@@ -11,9 +11,11 @@ export interface ItemRecord {
   description?: string | null;
   acct_unit?: string | null;
   specifications?: string | null;
+  low_stock_threshold?: number | string | null;
   total_quantity?: number | string | null;
   in_transit_quantity?: number | string | null;
   available_quantity?: number | string | null;
+  is_low_stock?: boolean;
   is_active: boolean;
   created_at?: string | null;
   updated_at?: string | null;
@@ -74,7 +76,7 @@ export interface ItemDistributionDetailRow {
   stockEntryIds: number[];
 }
 
-export type ItemStatusTone = "success" | "warning" | "neutral" | "disabled";
+export type ItemStatusTone = "success" | "warning" | "neutral" | "disabled" | "danger";
 
 export function toNumber(value: number | string | null | undefined) {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
@@ -145,11 +147,14 @@ export function flattenDistributionDetails(unit: ItemDistributionUnit | null | u
   return [...storeRows, ...allocationRows];
 }
 
-export function itemStatusTone(item: Pick<ItemRecord, "total_quantity" | "available_quantity" | "is_active">): ItemStatusTone {
-  if (!item.is_active) return "disabled";
+export function itemStatusTone(item: Pick<ItemRecord, "total_quantity">): ItemStatusTone {
   const total = toNumber(item.total_quantity);
-  const available = toNumber(item.available_quantity);
-  if (total <= 0) return "neutral";
-  if (available <= 0) return "warning";
-  return "success";
+  return total > 0 ? "success" : "danger";
+}
+
+export function isLowStock(item: Pick<ItemRecord, "is_low_stock" | "low_stock_threshold" | "total_quantity">) {
+  if (typeof item.is_low_stock === "boolean") return item.is_low_stock;
+  const threshold = toNumber(item.low_stock_threshold);
+  const total = toNumber(item.total_quantity);
+  return threshold > 0 && total > 0 && total <= threshold;
 }

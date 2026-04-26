@@ -7,20 +7,28 @@ import { useAuth } from "@/contexts/AuthContext";
 export type CapabilityLevel = "view" | "manage" | "full";
 export type ModuleDependencies = Record<string, Partial<Record<CapabilityLevel, string[]>>>;
 
+export interface InspectionStagesData {
+  available: string[];
+  held: string[];
+}
+
 export interface CapabilitiesResponse {
   modules: Record<string, CapabilityLevel | null>;
   is_superuser: boolean;
   manifest: Record<string, CapabilityLevel[]>;
   dependencies?: ModuleDependencies;
+  inspection_stages?: InspectionStagesData;
 }
 
 interface CapabilitiesContextValue {
   modules: Record<string, CapabilityLevel | null>;
   manifest: Record<string, CapabilityLevel[]>;
   dependencies: ModuleDependencies;
+  inspectionStages: InspectionStagesData;
   isSuperuser: boolean;
   isLoading: boolean;
   can: (module: string, level?: CapabilityLevel) => boolean;
+  hasInspectionStage: (stage: string) => boolean;
   refresh: () => Promise<void>;
 }
 
@@ -28,11 +36,14 @@ const LEVEL_RANK: Record<CapabilityLevel, number> = { view: 1, manage: 2, full: 
 
 const CapabilitiesContext = createContext<CapabilitiesContextValue | null>(null);
 
+const EMPTY_STAGES: InspectionStagesData = { available: [], held: [] };
+
 export function CapabilitiesProvider({ children }: { children: ReactNode }) {
   const { isAuthenticated } = useAuth();
   const [modules, setModules] = useState<Record<string, CapabilityLevel | null>>({});
   const [manifest, setManifest] = useState<Record<string, CapabilityLevel[]>>({});
   const [dependencies, setDependencies] = useState<ModuleDependencies>({});
+  const [inspectionStages, setInspectionStages] = useState<InspectionStagesData>(EMPTY_STAGES);
   const [isSuperuser, setIsSuperuser] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -42,11 +53,13 @@ export function CapabilitiesProvider({ children }: { children: ReactNode }) {
       setModules(res.modules ?? {});
       setManifest(res.manifest ?? {});
       setDependencies(res.dependencies ?? {});
+      setInspectionStages(res.inspection_stages ?? EMPTY_STAGES);
       setIsSuperuser(!!res.is_superuser);
     } catch {
       setModules({});
       setManifest({});
       setDependencies({});
+      setInspectionStages(EMPTY_STAGES);
       setIsSuperuser(false);
     } finally {
       setIsLoading(false);
@@ -58,6 +71,7 @@ export function CapabilitiesProvider({ children }: { children: ReactNode }) {
       setModules({});
       setManifest({});
       setDependencies({});
+      setInspectionStages(EMPTY_STAGES);
       setIsSuperuser(false);
       setIsLoading(false);
       return;
@@ -76,9 +90,17 @@ export function CapabilitiesProvider({ children }: { children: ReactNode }) {
     [modules, isSuperuser],
   );
 
+  const hasInspectionStage = useCallback(
+    (stage: string) => {
+      if (isSuperuser) return true;
+      return inspectionStages.held.includes(stage);
+    },
+    [inspectionStages, isSuperuser],
+  );
+
   const value = useMemo<CapabilitiesContextValue>(
-    () => ({ modules, manifest, dependencies, isSuperuser, isLoading, can, refresh: load }),
-    [modules, manifest, dependencies, isSuperuser, isLoading, can, load],
+    () => ({ modules, manifest, dependencies, inspectionStages, isSuperuser, isLoading, can, hasInspectionStage, refresh: load }),
+    [modules, manifest, dependencies, inspectionStages, isSuperuser, isLoading, can, hasInspectionStage, load],
   );
 
   return <CapabilitiesContext.Provider value={value}>{children}</CapabilitiesContext.Provider>;

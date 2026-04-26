@@ -58,7 +58,7 @@ export default function LoginPage() {
     setError(null);
     try {
       await login(username, password);
-      router.push("/users");
+      router.replace("/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed. Check your credentials.");
     } finally {

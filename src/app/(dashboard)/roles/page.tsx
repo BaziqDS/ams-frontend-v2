@@ -25,12 +25,20 @@ interface PermissionDetail {
 type ModuleSelections = Record<string, CapabilityLevel | null>;
 type DependencyMinimums = Record<string, CapabilityLevel>;
 
+const INSPECTION_STAGE_LABELS: Record<string, string> = {
+  initiate_inspection: "Stage 1 — Initiate",
+  fill_stock_details: "Stage 2 — Stock Details",
+  fill_central_register: "Stage 3 — Central Register",
+  review_finance: "Stage 4 — Finance Review",
+};
+
 interface Role {
   id: number;
   name: string;
   permissions: number[];
   permissions_details?: PermissionDetail[];
   module_selections?: ModuleSelections;
+  inspection_stages?: string[];
   created_at?: string | null;
 }
 
@@ -343,6 +351,8 @@ function RoleModal({
 }) {
   const [name, setName] = useState("");
   const [selections, setSelections] = useState<ModuleSelections>({});
+  const [inspectionStages, setInspectionStages] = useState<string[]>([]);
+  const [stageDropdownOpen, setStageDropdownOpen] = useState(false);
   const [touched, setTouched] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -354,6 +364,8 @@ function RoleModal({
       mergeSelections(manifest, role?.module_selections),
       dependencies,
     ));
+    setInspectionStages(role?.inspection_stages ?? []);
+    setStageDropdownOpen(false);
     setTouched(false);
     setSubmitting(false);
     setSubmitError(null);
@@ -396,6 +408,16 @@ function RoleModal({
       { ...prev, [module]: level },
       dependencies,
     ));
+    if (module === "inspections" && level !== "manage") {
+      setInspectionStages([]);
+      setStageDropdownOpen(false);
+    }
+  };
+
+  const toggleInspectionStage = (stageKey: string) => {
+    setInspectionStages(prev =>
+      prev.includes(stageKey) ? prev.filter(s => s !== stageKey) : [...prev, stageKey],
+    );
   };
 
   const submit = async () => {
@@ -405,9 +427,12 @@ function RoleModal({
 
     setSubmitting(true);
     try {
-      const payload: { name: string; module_selections?: ModuleSelections } = { name: name.trim() };
+      const payload: { name: string; module_selections?: ModuleSelections; inspection_stages?: string[] } = { name: name.trim() };
       if (canAssignPermissions) {
         payload.module_selections = selections;
+        if (selections.inspections === "manage" && inspectionStages.length > 0) {
+          payload.inspection_stages = inspectionStages;
+        }
       }
       const body = JSON.stringify(payload);
       if (mode === "edit" && role) {
@@ -540,6 +565,35 @@ function RoleModal({
                       </tbody>
                     </table>
                   </div>
+                  {selections.inspections === "manage" && (
+                    <div className="inspection-stage-picker">
+                      <div className="inspection-stage-picker-head">
+                        <Ic d={LOCK_ICON_PATH} size={13} />
+                        <span>Inspection Stage Access</span>
+                        <span className="mono" style={{ fontSize: 11, color: "var(--muted)" }}>
+                          {inspectionStages.length} of 4 stages selected
+                        </span>
+                      </div>
+                      <div className="inspection-stage-picker-hint">
+                        Select which inspection workflow stages this role can handle. Users will only see the form and actions for their assigned stages.
+                      </div>
+                      <div className="inspection-stage-grid">
+                        {Object.entries(INSPECTION_STAGE_LABELS).map(([key, label]) => {
+                          const checked = inspectionStages.includes(key);
+                          return (
+                            <label key={key} className={"inspection-stage-option" + (checked ? " selected" : "")}>
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => toggleInspectionStage(key)}
+                              />
+                              <span className="inspection-stage-option-label">{label}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </Section>

@@ -14,6 +14,7 @@ import {
   formatItemDate,
   formatItemLabel,
   formatQuantity,
+  isLowStock,
   itemStatusTone,
   toNumber,
   type ItemDistributionDetailRow,
@@ -35,6 +36,7 @@ type ItemFormState = {
   code: string;
   category: string;
   acct_unit: string;
+  low_stock_threshold: string;
   description: string;
   specifications: string;
   is_active: boolean;
@@ -118,13 +120,10 @@ function StatusPill({ active, tone, label }: { active?: boolean; tone?: ItemStat
     : resolvedTone === "danger"
       ? "pill pill-danger"
       : "pill pill-neutral";
-  const style = resolvedTone === "warning"
-    ? { background: "var(--warning-weak)", color: "var(--warn)" }
-    : undefined;
   return (
-    <span className={className} style={style}>
+    <span className={className}>
       <span className={"status-dot " + (resolvedTone === "success" ? "active" : "inactive")} />
-      {label ?? (resolvedTone === "disabled" ? "Disabled" : formatItemLabel(resolvedTone))}
+      {label ?? (resolvedTone === "danger" ? "Out of Stock" : resolvedTone === "disabled" ? "Disabled" : "In Stock")}
     </span>
   );
 }
@@ -179,6 +178,7 @@ function itemForm(item: ItemRecord | null): ItemFormState {
     code: item?.code ?? "",
     category: item?.category == null ? "" : String(item.category),
     acct_unit: item?.acct_unit ?? "",
+    low_stock_threshold: item?.low_stock_threshold == null ? "" : String(item.low_stock_threshold),
     description: item?.description ?? "",
     specifications: item?.specifications ?? "",
     is_active: item?.is_active ?? true,
@@ -191,10 +191,16 @@ function itemPayload(form: ItemFormState) {
     code: form.code.trim().toUpperCase(),
     category: Number(form.category),
     acct_unit: form.acct_unit.trim(),
+    low_stock_threshold: Number(form.low_stock_threshold),
     description: form.description.trim() || null,
     specifications: form.specifications.trim() || null,
     is_active: form.is_active,
   };
+}
+
+function LowStockBadge({ item }: { item: Pick<ItemRecord, "is_low_stock" | "low_stock_threshold" | "total_quantity"> }) {
+  if (!isLowStock(item)) return null;
+  return <StatusPill tone="warning" label="Low Stock" />;
 }
 
 function ItemModal({
@@ -239,15 +245,25 @@ function ItemModal({
     name: touched.has("name") && !form.name.trim() ? "Item name is required." : undefined,
     category: touched.has("category") && !form.category ? "Select a subcategory for this item." : undefined,
     acct_unit: touched.has("acct_unit") && !form.acct_unit.trim() ? "Accounting unit is required." : undefined,
+    low_stock_threshold: touched.has("low_stock_threshold") && (!form.low_stock_threshold || !/^\d+$/.test(form.low_stock_threshold) || Number(form.low_stock_threshold) < 1)
+      ? "Low-stock threshold must be at least 1."
+      : undefined,
   };
   const issueCount = Object.values(errors).filter(Boolean).length;
   const canSave = !submitting && categories.length > 0;
   const set = (patch: Partial<ItemFormState>) => setForm(prev => ({ ...prev, ...patch }));
 
   const submit = async () => {
-    setTouched(new Set(["name", "category", "acct_unit"]));
+    setTouched(new Set(["name", "category", "acct_unit", "low_stock_threshold"]));
 
-    if (!form.name.trim() || !form.category || !form.acct_unit.trim()) {
+    if (
+      !form.name.trim() ||
+      !form.category ||
+      !form.acct_unit.trim() ||
+      !form.low_stock_threshold ||
+      !/^\d+$/.test(form.low_stock_threshold) ||
+      Number(form.low_stock_threshold) < 1
+    ) {
       setSubmitError("Please complete the required fields.");
       return;
     }
@@ -314,6 +330,17 @@ function ItemModal({
                 </Field>
                 <Field label="Accounting unit" required error={errors.acct_unit}>
                   <input value={form.acct_unit} onChange={e => set({ acct_unit: e.target.value })} onBlur={() => setTouched(prev => new Set(prev).add("acct_unit"))} placeholder="pcs, units, meters" />
+                </Field>
+                <Field label="Low-stock threshold" required error={errors.low_stock_threshold} hint="Trigger a warning when total stock reaches this quantity or lower.">
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={form.low_stock_threshold}
+                    onChange={e => set({ low_stock_threshold: e.target.value })}
+                    onBlur={() => setTouched(prev => new Set(prev).add("low_stock_threshold"))}
+                    placeholder="Enter minimum threshold"
+                  />
                 </Field>
                 <Field label="Active state">
                   <div className="seg seg-inline">
@@ -426,7 +453,10 @@ function ItemCard({
         <div className="avatar" style={{ width: 44, height: 44, fontSize: 12, background: "linear-gradient(135deg, color-mix(in oklch, var(--primary) 82%, white), var(--primary))" }}>
           {(item.name || "IT").split(" ").map(n => n[0]).filter(Boolean).slice(0, 2).join("").toUpperCase() || "IT"}
         </div>
-        <StatusPill tone={tone} label={tone === "warning" ? "No Available Stock" : undefined} />
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <StatusPill tone={tone} label={tone === "danger" ? "Out of Stock" : "In Stock"} />
+          <LowStockBadge item={item} />
+        </div>
       </div>
       <div className="user-card-name">{item.name}</div>
       <div className="user-card-meta mono">{item.code}</div>
@@ -565,6 +595,7 @@ export function ItemListView() {
       if (statusFilter === "disabled" && item.is_active) return false;
       if (statusFilter === "available" && toNumber(item.available_quantity) <= 0) return false;
       if (statusFilter === "out" && (toNumber(item.total_quantity) <= 0 || toNumber(item.available_quantity) > 0)) return false;
+      if (statusFilter === "low" && !isLowStock(item)) return false;
       return true;
     });
   }, [categoryFilter, items, search, statusFilter, trackingFilter]);
@@ -691,6 +722,7 @@ export function ItemListView() {
                 <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} aria-label="Filter items by status">
                   <option value="all">All statuses</option>
                   <option value="available">Available</option>
+                  <option value="low">Low stock</option>
                   <option value="out">No stock</option>
                   <option value="active">Active</option>
                   <option value="disabled">Disabled</option>
@@ -746,13 +778,14 @@ export function ItemListView() {
                     <th>Available</th>
                     <th>In Transit</th>
                     <th>Status</th>
+                    <th>Alert</th>
                     <th>Updated</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredItems.length === 0 ? (
-                    <EmptyTableRow colSpan={9} message="No items match the current filters." />
+                    <EmptyTableRow colSpan={10} message="No items match the current filters." />
                   ) : filteredItems.map(item => {
                     const tone = itemStatusTone(item);
                     return (
@@ -778,7 +811,8 @@ export function ItemListView() {
                         <td className="mono">{formatQuantity(item.total_quantity)}</td>
                         <td className="mono">{formatQuantity(item.available_quantity)}</td>
                         <td className="mono">{formatQuantity(item.in_transit_quantity)}</td>
-                        <td><StatusPill tone={tone} label={tone === "warning" ? "No Available Stock" : undefined} /></td>
+                        <td><StatusPill tone={tone} label={tone === "danger" ? "Out of Stock" : "In Stock"} /></td>
+                        <td>{isLowStock(item) ? <LowStockBadge item={item} /> : <span className="muted-note">-</span>}</td>
                         <td className="col-login">
                           <div className="login-cell">
                             <div>{formatItemDate(item.updated_at, "Unknown")}</div>
@@ -930,6 +964,11 @@ export function ItemDistributionView({ itemId }: { itemId: string }) {
         {fetchError && (
           <Alert onDismiss={() => setFetchError(null)} action={<button type="button" className="btn btn-xs" onClick={() => load()}>Retry</button>}>
             {fetchError}
+          </Alert>
+        )}
+        {item && isLowStock(item) && (
+          <Alert>
+            {`${item.name} is low on stock. Total quantity is ${formatQuantity(item.total_quantity)} against a threshold of ${formatQuantity(item.low_stock_threshold)}.`}
           </Alert>
         )}
 
@@ -1103,6 +1142,11 @@ export function ItemStandaloneDistributionView({ itemId, standaloneId }: { itemI
         {fetchError && (
           <Alert onDismiss={() => setFetchError(null)} action={<button type="button" className="btn btn-xs" onClick={() => load()}>Retry</button>}>
             {fetchError}
+          </Alert>
+        )}
+        {item && isLowStock(item) && (
+          <Alert>
+            {`${item.name} is low on stock. Total quantity is ${formatQuantity(item.total_quantity)} against a threshold of ${formatQuantity(item.low_stock_threshold)}.`}
           </Alert>
         )}
 

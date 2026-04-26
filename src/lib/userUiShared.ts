@@ -50,6 +50,26 @@ export interface LocationRecord {
   updated_at: string;
 }
 
+export interface StockRegisterRecord {
+  id: number;
+  register_number: string;
+  register_type: "CSR" | "DSR";
+  store: number;
+  store_name?: string | null;
+  is_active: boolean;
+  closed_at?: string | null;
+  closed_by?: number | null;
+  closed_by_name?: string | null;
+  closed_reason?: string | null;
+  reopened_at?: string | null;
+  reopened_by?: number | null;
+  reopened_by_name?: string | null;
+  reopened_reason?: string | null;
+  created_at: string;
+  updated_at: string;
+  created_by_name?: string | null;
+}
+
 export const LOCATION_TYPE_LABELS: Record<string, string> = {
   DEPARTMENT: "Department",
   BUILDING: "Building",

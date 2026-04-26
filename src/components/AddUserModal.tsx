@@ -121,12 +121,14 @@ function LocationScopePicker({
     () => locations.some(location => location.parent_id === null && location.depth === 0),
     [locations]
   );
-  const standaloneLocations = useMemo(() => {
-    const nonRootStandalone = locations.filter(location => location.is_standalone && location.parent_id !== null);
-    return nonRootStandalone.length > 0
-      ? nonRootStandalone
-      : locations.filter(location => location.is_standalone);
-  }, [locations]);
+  const standaloneLocations = useMemo(
+    () =>
+      [...locations.filter(location => location.is_standalone)].sort((a, b) => {
+        if (a.depth !== b.depth) return a.depth - b.depth;
+        return a.name.localeCompare(b.name);
+      }),
+    [locations]
+  );
   const standaloneFixed = !hasRootScope && standaloneLocations.length === 1;
 
   const isDescendantOf = (location: AssignableLocation, standaloneId: number) => {
@@ -141,9 +143,17 @@ function LocationScopePicker({
   const descendantsByStandalone = useMemo(() => {
     const map = new Map<number, AssignableLocation[]>();
     standaloneLocations.forEach(standalone => {
+      const isRootStandalone = standalone.parent_id === null && standalone.depth === 0;
       map.set(
         standalone.id,
-        locations.filter(location => location.id !== standalone.id && isDescendantOf(location, standalone.id))
+        locations.filter(
+          location =>
+            location.id !== standalone.id &&
+            !location.is_standalone &&
+            (isRootStandalone
+              ? location.parent_id === standalone.id
+              : isDescendantOf(location, standalone.id))
+        )
       );
     });
     return map;

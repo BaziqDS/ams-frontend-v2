@@ -32,6 +32,24 @@ export const ADMIN_PERMISSIONS = {
     change: "inventory.edit_items",
     delete: "inventory.delete_items",
   },
+  stockEntries: {
+    view: "inventory.view_stock_entries",
+    add: "inventory.create_stock_entries",
+    change: "inventory.edit_stock_entries",
+    delete: "inventory.delete_stock_entries",
+  },
+  stockRegisters: {
+    view: "inventory.view_stock_registers",
+    add: "inventory.create_stock_registers",
+    change: "inventory.edit_stock_registers",
+    delete: "inventory.delete_stock_registers",
+  },
+  inspections: {
+    view: "inventory.view_inspectioncertificate",
+    add: "inventory.add_inspectioncertificate",
+    change: "inventory.change_inspectioncertificate",
+    delete: "inventory.delete_inspectioncertificate",
+  },
 } as const;
 
 export const PROTECTED_ADMIN_ROUTES = {
@@ -40,6 +58,9 @@ export const PROTECTED_ADMIN_ROUTES = {
   "/locations": ADMIN_PERMISSIONS.locations.view,
   "/categories": ADMIN_PERMISSIONS.categories.view,
   "/items": ADMIN_PERMISSIONS.items.view,
+  "/stock-entries": ADMIN_PERMISSIONS.stockEntries.view,
+  "/stock-registers": ADMIN_PERMISSIONS.stockRegisters.view,
+  "/inspections": ADMIN_PERMISSIONS.inspections.view,
 } as const;
 
 export function hasPermission(userPermissions: string[] | undefined, requiredPermission: string) {

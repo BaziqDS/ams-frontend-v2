@@ -3,6 +3,7 @@ import {
   canShowInstances,
   findDistributionUnit,
   flattenDistributionDetails,
+  isLowStock,
   itemStatusTone,
   type ItemDistributionUnit,
 } from "./itemUi";
@@ -82,10 +83,15 @@ describe("item UI helpers", () => {
     ]);
   });
 
-  it("marks zero availability with a warning tone", () => {
-    expect(itemStatusTone({ total_quantity: 10, available_quantity: 0, is_active: true })).toBe("warning");
-    expect(itemStatusTone({ total_quantity: 0, available_quantity: 0, is_active: true })).toBe("neutral");
-    expect(itemStatusTone({ total_quantity: 4, available_quantity: 2, is_active: true })).toBe("success");
-    expect(itemStatusTone({ total_quantity: 4, available_quantity: 2, is_active: false })).toBe("disabled");
+  it("marks items as in stock only when total quantity is above zero", () => {
+    expect(itemStatusTone({ total_quantity: 10 })).toBe("success");
+    expect(itemStatusTone({ total_quantity: 4 })).toBe("success");
+    expect(itemStatusTone({ total_quantity: 0 })).toBe("danger");
+  });
+
+  it("flags low stock only when quantity is above zero and within threshold", () => {
+    expect(isLowStock({ total_quantity: 3, low_stock_threshold: 5 })).toBe(true);
+    expect(isLowStock({ total_quantity: 7, low_stock_threshold: 5 })).toBe(false);
+    expect(isLowStock({ total_quantity: 0, low_stock_threshold: 5 })).toBe(false);
   });
 });
